@@ -1,0 +1,9 @@
+# Sonador Client Library
+git+https://code.oak-tree.tech/guru-labs/packages/guru-client.git
+git+https://code.oak-tree.tech/oak-tree/medical-imaging/packages/sonador.git
+
+
+# Medical Imaging Utilities
+SimpleITK==2.0.1
+pyvista==0.27.3
+
