@@ -1,12 +1,20 @@
 import os, tempfile, logging, functools
+from collections import OrderedDict
+
 import numpy as np
-import itk, vtk
+import vtk
 import SimpleITK as sitk
 
 from sonador.imaging.orthanc import ImagingSeries
 from sonador.tasks.images import download_imaging_filearchive
+from sonador.imaging.orthanc.seg import ImageSegmentData
+
+from .seg import dcmseg2labelmap
 
 logger = logging.getLogger(__name__)
+
+
+LABELMAP_DTYPE_DEFAULT = np.uint8
 
 
 class SonadorImagingVolume(object):
@@ -29,7 +37,7 @@ class SonadorImagingVolume(object):
 	def fectch_volume(self, *args, **kwargs):
 		'''	Retrieve the voxel data associated with the image and return a point cloud
 
-			@returns itk.vtkImage
+			@returns SimpleITK.Image
 		'''
 		if not len(self.series.slices_collection):
 			raise ValueError(('Unable to retrieve imaging data for series %s, series does not contain any '
@@ -57,11 +65,50 @@ class SonadorImagingVolume(object):
 	@property
 	def volume(self):
 		'''	Voxel data for the imaging series
+
+			@returns sitk.Image
 		'''
 		if getattr(self, '_volume', None) is None:
 			setattr(self, '_volume', self.fectch_volume())
 
 		return self._volume
+
+	def labelmap_arrays(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT):
+		'''	Create labelmap arrays from image segments for the image
+
+			@input segments: iterable of segments (ImageSegmentData) to be included in the labelmap
+				(default=segmentations associated with the imaging series)
+
+			returns OrderedDict of labelmaps (numpy.ndarray) indexed to the segment metadata
+		'''
+		# Retrieve segments from Sonador segmentations (DICOM-SEG)
+		if segments is None:
+			segments = []
+			for dcmseg in self.series.segmentations:
+				segments.extend([s for s in dcmseg.segments])
+
+		# Package segments as NumPy arrays
+		return OrderedDict(
+			(seg.meta, dcmseg2labelmap(self.series, seg, dtype=dtype)) for seg in segments)
+
+	def labelmaps(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT):
+		'''	Create a labelmap from image segments for the image. (Calls labelmap_arrays
+				to package the labelmap volumes.)
+			
+			@returns OrderedDict of labelmaps (sitk.Image) indexed to the segment metadata
+		'''
+		labelmaps = OrderedDict()
+
+		for smeta, sdata in self.labelmap_arrays(segments=segments, dtype=dtype).items():
+			labelmaps[smeta] = sitk.GetImageFromArray(sdata[::-1])
+
+		return labelmaps
+
+	@property
+	def volume_array(self):
+		'''	numpy.ndarray representation of the imaging voxel data
+		'''
+		return sitk.GetArrayFromImage(self.volume)
 
 	@functools.cached_property
 	def transform_matrix(self):
