@@ -31,16 +31,20 @@ class SonadorImagingVolume(object):
 	def __init__(self, series, *args, **kwargs):
 		self.series = series
 		self._volume = kwargs.get('volume')
+		self._reader = kwargs.get('reader')
 
 		# Ensure that an imaging series was provided
 		if not isinstance(self.series, ImagingSeries):
 			raise ValueError('Unable to initialize imaging volume, invalid DICOM resource. '
 				+ 'Volumes may only be initialized using ImagingSeries resources.')
 
-		# Check the 
-		if self._volume and not isinstance(self._volume, sitk.SimpleITK.Image):
+		# Check volume instance and ensure it is a SimpleITK Image
+		if self._volume and not isinstance(self._volume, sitk.Image):
 			raise ValueError('Invalid volume type. SonadorImagingVolume instances '
 				+ 'may only be initilized from SimpleITK.Image instances.')
+
+		# Labelmap options
+		self._labelmap_opts = kwargs.get('labelmap_opts', {})
 
 	def fectch_volume(self, *args, **kwargs):
 		'''	Retrieve the voxel data associated with the image and return a point cloud
@@ -57,8 +61,21 @@ class SonadorImagingVolume(object):
 			download_imaging_filearchive(self.series, tmp, extract=True)
 			ipath = os.path.join(tmp, self.series.pk, 'IMAGES')
 
-			dcm_names = sitk.ImageSeriesReader().GetGDCMSeriesFileNames(ipath)
-			return sitk.ReadImage(dcm_names, *args, **kwargs)
+			# Initialize image series reader
+			self._reader = sitk.ImageSeriesReader()
+			if kwargs.get('load_meta', True):
+				self._reader.MetaDataDictionaryArrayUpdateOn()
+				self._reader.LoadPrivateTagsOn()
+
+			# Set file names
+			self._reader.SetFileNames(self._reader.GetGDCMSeriesFileNames(ipath))
+
+			# Set output options
+			self._reader.SetImageIO(kwargs.get('image_type', ''))
+			self._reader.SetOutputPixelType(kwargs.get('pixel_type', sitk.sitkUnknown))
+
+			# Read image stack
+			return self._reader.Execute()
 
 	@property
 	def center(self):
@@ -91,7 +108,7 @@ class SonadorImagingVolume(object):
 
 		return self._volume
 
-	def labelmap_arrays(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT):
+	def labelmap_arrays(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT, **kwargs):
 		'''	Create labelmap arrays from image segments for the image
 
 			@input segments: iterable of segments (ImageSegmentData) to be included in the labelmap
@@ -107,20 +124,46 @@ class SonadorImagingVolume(object):
 
 		# Package segments as NumPy arrays
 		return OrderedDict(
-			(seg.meta, dcmseg2labelmap(self.series, seg, dtype=dtype)) for seg in segments)
+			(seg.meta, dcmseg2labelmap(self.series, seg, dtype=dtype, **kwargs)) for seg in segments)
 
-	def labelmaps(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT):
-		'''	Create a labelmap from image segments for the image. (Calls labelmap_arrays
-				to package the labelmap volumes.)
+	def fetch_labelmaps(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT, **kwargs):
+		'''	Retrieve segmentations and create labelmap images from segments for the volume. 
+			(Calls labelmap_arrays to package the labelmap volumes.)
 			
 			@returns OrderedDict of labelmaps (sitk.Image) indexed to the segment metadata
 		'''
 		labelmaps = OrderedDict()
 
-		for smeta, sdata in self.labelmap_arrays(segments=segments, dtype=dtype).items():
-			labelmaps[smeta] = sitk.GetImageFromArray(sdata[::-1])
+		for smeta, sdata in self.labelmap_arrays(segments=segments, dtype=dtype, **kwargs).items():
+			labelmaps[smeta] = sitk.GetImageFromArray(sdata)
 
 		return labelmaps
+
+	@property
+	def labelmaps(self, *args, **kwargs):
+		'''	Labelmap images of segmentations associated with the image.
+
+			@returns OrderedDict of labelmap images keyed to the segment metadata
+		'''
+		if getattr(self, '_labelmap_dict', None) is None:
+			setattr(self, '_labelmap_dict', self.fetch_labelmaps(**self._labelmap_opts))
+
+		return self._labelmap_dict
+
+	@property
+	def labelmaps_image(self):
+		'''	SimpleITK.Image with labelmap values in a single image instance for visualization and multi-label analysis.
+			Each segmentation is encoded with a different integer value depending on their order in the DICOM-SEG file.			
+		'''
+		seg_size = self.volume.GetSize()
+		seg_labelmap = sitk.Image(seg_size[0], seg_size[1], seg_size[2],
+			self._labelmap_opts.get('dtype', self.volume.GetPixelIDValue()))
+
+		# Pack labelmaps into SimpleITK image instance
+		for i, cmask in enumerate(self.labelmaps.values()):
+			seg_labelmap += (i+1)*sitk.Cast(cmask, seg_labelmap.GetPixelIDValue())
+
+		return seg_labelmap
 
 	@property
 	def volume_array(self):
@@ -229,7 +272,7 @@ class SonadorImagingVolume(object):
 			return self
 
 		# Return a new imaging volume with the changes applied
-		return SonadorImagingVolume(self.series, volume=volume)
+		return SonadorImagingVolume(self.series, volume=volume, reader=self._reader)
 
 	def rotate(self, x_deg, y_deg, z_deg, center=None, inplace=False):
 		'''	Rotate the volume the specified number of degrees around the x, y, z axis
