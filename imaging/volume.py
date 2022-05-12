@@ -108,6 +108,23 @@ class SonadorImagingVolume(object):
 
 		return self._volume
 
+	def fetch_dcmsegments(self, *args, segments=None, segfilter=None, **kwargs):
+		'''	Retrieve DICOM segments from imaging series. All segments from all segmentations
+			are included.
+
+			@returns iterable of DICOM segments
+		'''
+		# Retrieve segments from DICOM segmentations associated with the series
+		segments = segments or []
+		for dcmseg in self.series.segmentations:
+			segments.extend([s for s in dcmseg.segments])
+
+		# Filter segments
+		if segfilter and callable(segfilter):
+			segments = list(filter(segfilter, segments))
+
+		return segments
+
 	def labelmap_arrays(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT, **kwargs):
 		'''	Create labelmap arrays from image segments for the image
 
@@ -117,14 +134,11 @@ class SonadorImagingVolume(object):
 			returns OrderedDict of labelmaps (numpy.ndarray) indexed to the segment metadata
 		'''
 		# Retrieve segments from Sonador segmentations (DICOM-SEG)
-		if segments is None:
-			segments = []
-			for dcmseg in self.series.segmentations:
-				segments.extend([s for s in dcmseg.segments])
+		segments = segments or self.fetch_dcmsegments(**kwargs)
 
 		# Package segments as NumPy arrays
 		return OrderedDict(
-			(seg.meta, dcmseg2labelmap(self.series, seg, dtype=dtype, **kwargs)) for seg in segments)
+			(seg.meta, dcmseg2labelmap(self, seg, dtype=dtype, **kwargs)) for seg in segments)
 
 	def fetch_labelmaps(self, segments=None, dtype=LABELMAP_DTYPE_DEFAULT, **kwargs):
 		'''	Retrieve segmentations and create labelmap images from segments for the volume. 
@@ -135,15 +149,43 @@ class SonadorImagingVolume(object):
 		labelmaps = OrderedDict()
 
 		for smeta, sdata in self.labelmap_arrays(segments=segments, dtype=dtype, **kwargs).items():
-			labelmaps[smeta] = sitk.GetImageFromArray(sdata)
+
+			# Initialize labelmap instance with volume direction, origin, spacing
+			seg_labelmap = labelmaps[smeta] = sitk.GetImageFromArray(sdata)
+			seg_labelmap.SetDirection(self.volume.GetDirection())
+			seg_labelmap.SetOrigin(self.volume.GetOrigin())
+			seg_labelmap.SetSpacing(self.volume.GetSpacing())
 
 		return labelmaps
+
+	def _init_empty_image(self, img=None, direction=None, origin=None, spacing=None):
+		''' Initialize an SimpleITK.Image with the same properties as the provided image.
+
+			@input img (SimpleITK.Image, default=volume): Image to be used for creating the
+				placeholder.
+		'''
+		img = img or self.volume
+
+		# Retrieve size, direction, and origin
+		isize = img.GetSize()
+		direction = direction or img.GetDirection()
+		origin = origin or img.GetOrigin()
+		spacing = spacing or img.GetSpacing()
+
+		# Initialize image
+		empty_img = sitk.Image(isize[0], isize[1], isize[2], 
+			self._labelmap_opts.get('dtype', img.GetPixelIDValue()))
+		empty_img.SetDirection(direction)
+		empty_img.SetOrigin(origin)
+		empty_img.SetSpacing(spacing)
+
+		return empty_img
 
 	@property
 	def labelmaps(self, *args, **kwargs):
 		'''	Labelmap images of segmentations associated with the image.
 
-			@returns OrderedDict of labelmap images keyed to the segment metadata
+			@returns OrderedDict of labelmap images (SimpleITK.Image) keyed to the segment metadata
 		'''
 		if getattr(self, '_labelmap_dict', None) is None:
 			setattr(self, '_labelmap_dict', self.fetch_labelmaps(**self._labelmap_opts))
@@ -155,11 +197,8 @@ class SonadorImagingVolume(object):
 		'''	SimpleITK.Image with labelmap values in a single image instance for visualization and multi-label analysis.
 			Each segmentation is encoded with a different integer value depending on their order in the DICOM-SEG file.			
 		'''
-		seg_size = self.volume.GetSize()
-		seg_labelmap = sitk.Image(seg_size[0], seg_size[1], seg_size[2],
-			self._labelmap_opts.get('dtype', self.volume.GetPixelIDValue()))
-
 		# Pack labelmaps into SimpleITK image instance
+		seg_labelmap = self._init_empty_image()
 		for i, cmask in enumerate(self.labelmaps.values()):
 			seg_labelmap += (i+1)*sitk.Cast(cmask, seg_labelmap.GetPixelIDValue())
 
