@@ -11,6 +11,7 @@ from sonador.tasks.images import download_imaging_filearchive
 from sonador.imaging.orthanc.seg import ImageSegmentData
 
 from .seg import dcmseg2labelmap
+from .helpers import imagevolume_center
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +84,7 @@ class SonadorImagingVolume(object):
 
 			@returns ImageCoord
 		'''
-		width, height, depth = self.volume.GetSize()
-		return ImageCoord(*self.volume.TransformIndexToPhysicalPoint((
-			int(np.ceil(width/2)),
-         	int(np.ceil(height/2)),
-            int(np.ceil(depth/2)))))
+		return imagevolume_center(self.volume)
 
 	@property
 	def origin(self):
