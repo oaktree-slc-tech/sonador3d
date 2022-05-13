@@ -54,7 +54,7 @@ def dcmslice_match_zpos(zpos, dcmslice_zpos):
             slice_z == zpos or zpos - slice_thickness/2 <= slice_z <= zpos + slice_thickness/2)
 
 
-def dcmseg2labelmap(ivolume, dcmseg: ImageSegmentData, dtype=None, voltype=IMAGING_VOLUME_TYPE_NUMPY):
+def dcmseg2labelmap(ivolume, dcmseg: ImageSegmentData, dtype=None, voltype=IMAGING_VOLUME_TYPE_NUMPY, **kwargs):
     ''' Package a DICOM segmentation file as a labelmap array.
         
         @input dcmseries (SonadorImagingVolume): medical imaging series for which the labelmap should be created
