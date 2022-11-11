@@ -207,7 +207,8 @@ class SonadorImagingVolume(object):
 		'''
 		return sitk.GetArrayFromImage(self.volume)
 
-	@functools.cached_property
+	@property
+	@functools.lru_cache()
 	def rotation_matrix(self):
 		'''	Rotation matrix for the image series calculated from the ImageOrientationPatient
 			headers of the series.
