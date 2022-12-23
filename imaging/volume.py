@@ -4,6 +4,7 @@ from collections import OrderedDict, namedtuple
 import numpy as np
 import vtk
 import SimpleITK as sitk
+import pyvista as pv
 
 from sonador.imaging.orthanc import ImagingSeries
 from sonador.imaging.orthanc.base import ImageCoord
@@ -26,8 +27,19 @@ IDENTIY_3D = np.array([
 ])
 
 
+# Direction matrix that can be used to align imaging volumes in a neutral coordinate
+# system without "pose" data or to calculate coordinate transforms.
+
+NUETRAL_3D_POSE = np.array([
+	[0, 0, -1.0],
+	[1.0, 0, 0],
+	[0, -1.0, 0]
+])
+
+
 class SonadorImagingVolume(object):
-	'''	Helper object used for working with 3D medical imaging volumes retrieved from Sonador
+	'''	Helper object used for working with 3D medical imaging data retrieved from Sonador.
+		"volume" property is a SimpleITK image.
 	'''
 	def __init__(self, series, *args, **kwargs):
 		self.series = series
@@ -361,4 +373,54 @@ class SonadorImagingVolume(object):
 		transform = sitk.TranslationTransform(self.volume.GetDimension(), offset)
 		return self.resample(transform, inplace=inplace)
 
-	
+
+class PyVistaImagingVolume(object):
+	'''	Helper object used for working with 3D medical imaging data retrieved from Sonador.
+		"volume" property is a PyVista volume.
+	'''
+	def __init__(self, series, *args, **kwargs):
+		self.series = series
+		self._volume = kwargs.get('volume')
+		self._reader = kwargs.get('reader')
+
+		# Ensure that an imaging series was provided
+		if not isinstance(self.series, ImagingSeries):
+			raise ValueError('Unable to initialize imaging volume, invalid DICOM resource. '
+				+ 'Volumes may only be initialized using ImagingSeries resources.')
+
+		# Check volume instance and ensure it is a SimpleITK Image
+		# if self._volume and not isinstance(self._volume, sitk.Image):
+		#	raise ValueError('Invalid volume type. SonadorImagingVolume instances '
+		#		+ 'may only be initilized from SimpleITK.Image instances.')
+
+	def fectch_volume(self, *args, **kwargs):
+		'''	Retrieve the voxel data associated with the image and return a point cloud
+
+			@returns SimpleITK.Image
+		'''
+		if not len(self.series.slices_collection):
+			raise ValueError(('Unable to retrieve imaging data for series %s, series does not contain any '
+				+ 'DICOM slices.') % self.series.pk)
+
+		with tempfile.TemporaryDirectory() as tmp:
+
+			# Download and unpack imaging pixel data from Orthanc
+			download_imaging_filearchive(self.series, tmp, extract=True)
+			ipath = os.path.join(tmp, self.series.pk, 'IMAGES')
+
+			if self._reader is None:
+				self._reader = pv.DICOMReader(ipath)
+
+			# Parse imaging volume
+			return self._reader.read()
+
+	@property
+	def volume(self):
+		'''	Voxel data for the imaging series
+
+			@returns sitk.Image
+		'''
+		if getattr(self, '_volume', None) is None:
+			setattr(self, '_volume', self.fectch_volume())
+
+		return self._volume
