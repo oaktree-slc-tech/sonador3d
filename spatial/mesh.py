@@ -19,8 +19,11 @@ logger = logging.getLogger(__name__)
 class SonadorMesh(object):
 	'''	Helper object used for working with 
 	'''
+	cache_dcm = False
+
 	def __init__(self, series, *args, **kwargs):
 		self.series = series
+		self.cache_dcm = kwargs.pop('cache_dcm', self.cache_dcm)
 
 		# Ensure that an M3D series was provided
 		if not isinstance(self.series, DcmM3DSeries):
@@ -46,7 +49,7 @@ class SonadorMesh(object):
 			# Retrieve DICOM file and determine file extension from the mimetype.
 			# VTK (and by extension PyVista) requires a local file instance to parse
 			# and uses file extensions to determine the data type.
-			dcmfile = dcm.dcmfile(cache=kwargs.get('cache', False))		
+			dcmfile = dcm.dcmfile(cache=kwargs.get('cache', self.cache_dcm))
 			dcm_mtype = getattr(dcmfile, DCMHEADER_ENCAPSULATED_DOCUMENT_MIMETYPE)
 			dcm_fext = mimetypes.guess_extension(dcm_mtype) or dcm_mimetype_guess_extension(dcm_mtype)
 
