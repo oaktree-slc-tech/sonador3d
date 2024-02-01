@@ -12,7 +12,7 @@ from sonador.tasks.images import download_imaging_filearchive
 from sonador.imaging.orthanc.seg import ImageSegmentData
 
 from .seg import dcmseg2labelmap
-from .helpers import imagevolume_center
+from .helpers import imagevolume_center, init_empty_image
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,7 @@ logger = logging.getLogger(__name__)
 LABELMAP_DTYPE_DEFAULT = np.uint8
 
 
-IDENTIY_3D = np.array([
-	[1, 0, 0], 
-	[0, 1, 0],
-	[0, 1, 1]
-])
+IDENTIY_3D = np.identity(3)
 
 
 # Direction matrix that can be used to align imaging volumes in a neutral coordinate
@@ -173,22 +169,8 @@ class SonadorImagingVolume(object):
 			@input img (SimpleITK.Image, default=volume): Image to be used for creating the
 				placeholder.
 		'''
-		img = img or self.volume
-
-		# Retrieve size, direction, and origin
-		isize = img.GetSize()
-		direction = direction or img.GetDirection()
-		origin = origin or img.GetOrigin()
-		spacing = spacing or img.GetSpacing()
-
-		# Initialize image
-		empty_img = sitk.Image(isize[0], isize[1], isize[2], 
-			self._labelmap_opts.get('dtype', img.GetPixelIDValue()))
-		empty_img.SetDirection(direction)
-		empty_img.SetOrigin(origin)
-		empty_img.SetSpacing(spacing)
-
-		return empty_img
+		return init_empty_image(img or self.volume, direction=direction, origin=origin, spacing=spacing,
+			dtype=self._labelmap_opts.get('dtype'))
 
 	@property
 	def labelmaps(self, *args, **kwargs):
@@ -211,7 +193,7 @@ class SonadorImagingVolume(object):
 		for i, cmask in enumerate(self.labelmaps.values()):
 			seg_labelmap += (i+1)*sitk.Cast(cmask, seg_labelmap.GetPixelIDValue())
 
-		return seg_labelmap
+		return seg_labelmap	
 
 	@property
 	def volume_array(self):
@@ -236,64 +218,10 @@ class SonadorImagingVolume(object):
 
 		return np.array([x, y, z]).T
 
-	def create_transform_bounding_volume(self, transform, volume=None, output_direction=IDENTIY_3D.flatten()):
-		'''	EXPERIMENTAL: Compute the bounds of a resampling grid for ITK transformations in order to determine
-			the size of an output image.
-
-			1. Find the phyiscal points of the current bounding shape
-			2. Create an inverse transform and apply the transform to the existing points
-			3. Calculate the minimum and maximum of the transformed points for x, y, z
-			4. Compute the grid size based on the physical size and spacing
-
-			@returns simpleITK.Image
-		'''
-		volume = volume or self.volume
-
-		# 1. Find the physical points of the current bounding shape
-		bounding_shape = [
-			volume.TransformIndexToPhysicalPoint([0, 0, 0]),
-			volume.TransformIndexToPhysicalPoint([0, 0, self.volume.GetDepth()]),
-			volume.TransformIndexToPhysicalPoint([self.volume.GetWidth(), 0, 0]),
-			volume.TransformIndexToPhysicalPoint([self.volume.GetWidth(), 0, self.volume.GetDepth()]),
-			volume.TransformIndexToPhysicalPoint([0, self.volume.GetHeight(), 0]),
-			volume.TransformIndexToPhysicalPoint([0, self.volume.GetHeight(), self.volume.GetDepth()]),
-			volume.TransformIndexToPhysicalPoint([self.volume.GetWidth(), self.volume.GetHeight(), 0]),
-			volume.TransformIndexToPhysicalPoint([
-				self.volume.GetWidth(), self.volume.GetHeight(), self.volume.GetDepth()]),
-		]
-
-		# 2. Create an inverse transfrm and apply the transform to the existing points
-		tx_inverse = transform.GetInverse()
-		bounding_tx = [tx_inverse.TransformPoint(p) for p in bounding_shape]
-
-		# 3. Calculate the minimum and maximum of the transform points for each of of the dimensions
-		min_x = min(bounding_shape)[0]
-		min_y = min(bounding_shape, key=lambda p: p[1])[1]
-		min_z = min(bounding_shape, key=lambda p: p[2])[2]
-		max_x = max(bounding_shape)[0]
-		max_y = max(bounding_shape, key=lambda p: p[1])[1]
-		max_z = max(bounding_shape, key=lambda p: p[2])[2]
-
-		# Spacing, direction, origin
-		output_spacing = self.volume.GetSpacing()
-
-		# Calculate the output size
-		output_size = [
-			int((max_x-min_x)/output_spacing[0]), 
-			int((max_y-min_y)/output_spacing[1]), 
-			int((max_z-min_z)/output_spacing[2])
-		]
-
-		# Output origin
-		output_origin = [min_x, min_y, min_z]
-
-		# Create output image
-		output_image = sitk.Image(output_size[0], output_size[1], output_size[2], volume.GetPixelIDValue())
-		output_image.SetOrigin(output_origin)
-		output_image.SetSpacing(output_spacing)
-		output_image.SetDirection(np.array(output_direction, dtype=np.double).flatten())
-
-		return output_image
+	@property
+	@functools.lru_cache()
+	def sitk_rotation_matrix(self):
+		return np.array(self.volume.GetDirection()).reshape((3,3))
 
 	def resample(self, transform, output_volume=None, default_value=0, interpolator=sitk.sitkLinear, inplace=False):
 		'''	Apply an image transform transform and resample the volume.
@@ -362,8 +290,7 @@ class SonadorImagingVolume(object):
 		if translation_matrix is not None:
 			transform.SetTranslation(translation_matrix)
 
-		return self.resample(transform, 
-			output_volume=self.create_transform_bounding_volume(transform), inplace=inplace)
+		return self.resample(transform, inplace=inplace)
 
 	def translate(self, offset, inplace=False):
 		'''	Translate the volume based on the provided offset

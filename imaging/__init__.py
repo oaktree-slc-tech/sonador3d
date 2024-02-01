@@ -1,1 +1,1 @@
-from .volume import SonadorImagingVolume
+from .volume import SonadorImagingVolume, PyVistaImagingVolume
