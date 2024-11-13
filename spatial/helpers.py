@@ -10,8 +10,6 @@ import pyvista as pv
 
 from sonador.imaging.orthanc.base import ImageCoord
 
-from ..imaging.helpers import init_empty_image, sitk2vtk
-
 logger = logging.getLogger(__name__)
 
 
@@ -104,6 +102,8 @@ def labelimg2mesh(img: sitk.Image, sitk_origin=True, sitk_direction=True, algori
 
 		@returns pv.PolyData
 	'''
+	from ..imaging.helpers import sitk2vtk
+
 	# Ensure that the requested algorithm is supported
 	if not algorithm in IMG2MESH_ALGORITHMS:
 		raise ValueError('Invalid algorithm "%s". Supported: %s'% (

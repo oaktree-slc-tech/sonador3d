@@ -1,2 +1,1 @@
-IMAGING_VOLUME_TYPE_NUMPY = 'numpy'
-IMAGING_VOLUME_TYPE_ITK = 'itk'
+from sonador3d_imaging.apisettings import IMAGING_VOLUME_TYPE_NUMPY, IMAGING_VOLUME_TYPE_ITK

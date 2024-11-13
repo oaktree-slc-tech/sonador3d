@@ -5,34 +5,12 @@ import vtk
 from vtk.util import numpy_support
 
 from sonador.imaging.orthanc.base import ImageCoord
+from sonador3d_imaging.apisettings import DCM_VOLUME_LEFT_POSTERIOR_SUPERIOR, \
+	DCM_VOLUME_RIGHT_ANTERIOR_INFERIOR, DCM_VOLUME_RIGHT_ANTERIOR_SUPERIOR
+from sonador3d_imaging.volume import SonadorImagingVolume
+from sonador3d_imaging.helpers import imagevolume_center, init_empty_image
 
-
-def imagevolume_center(img: sitk.Image):
-	'''	return the physical center point of the provided image
-	'''
-	width, height, depth = img.GetSize()
-	return ImageCoord(*img.TransformIndexToPhysicalPoint((
-		int(np.ceil(width/2)),
-        int(np.ceil(height/2)),
-		int(np.ceil(depth/2)))))
-
-
-def init_empty_image(img: sitk.Image, direction=None, origin=None, spacing=None, dtype=None):
-	'''	Create an empty SimpleITK.Image instance with the same parameters as the provided input.
-	'''
-	# Retrieve size, direction, and origin
-	isize = img.GetSize()
-	direction = direction or img.GetDirection()
-	origin = origin or img.GetOrigin()
-	spacing = spacing or img.GetSpacing()
-
-	# Initialize image
-	empty_img = sitk.Image(isize[0], isize[1], isize[2], dtype or img.GetPixelIDValue())
-	empty_img.SetDirection(direction)
-	empty_img.SetOrigin(origin)
-	empty_img.SetSpacing(spacing)
-
-	return empty_img
+from ..spatial.helpers import tx_matrix
 
 
 def sitk2vtk(img: sitk.Image, source_label='SimpleITK', sitk_origin=True, sitk_direction=True):
@@ -88,3 +66,44 @@ def sitk2vtk(img: sitk.Image, source_label='SimpleITK', sitk_origin=True, sitk_d
 	# Mark VTK image as modified
 	img_vtk.Modified()
 	return img_vtk
+
+
+def init_display_imagevolume(sx,
+		volume_anatomic_orientation_default=DCM_VOLUME_LEFT_POSTERIOR_SUPERIOR, vol_direction=False,
+		vol_dcm_attr='vol_dcm', vol_vtk_attr='vol_vtk', tx_inv_attr='tx_inv'):
+	'''	Initialize an imaging volume that is intended to be used for visualization.
+
+		There may be a mismatch in display settings between medical imaging, which often uses an 
+		"right-anterior-inferior" or "right-anterior-superior" coordinate axis for volumetric data 
+		and robotics systems, which favor a "left-posterior-superior" orientation.
+
+		This method initializes a SonadorImagingVolume from the provided series, adds properties 
+		for a "DICOM volume" (`vol_dcm`) with the desired anatomic orientation, a VTK version of the image
+		data (`vol_vtk), and the reverse transform matrix so that it is possible to place other objects
+		such as points and meshes within the same coordinate system as the imaging volume.
+
+		@input sx (sonador.imaging.orthanc.ImagingSeries): imaging series for which the display volume
+			should be initialized.
+		@input volume_anatomic_orientation_default (default='LPS'): volume orientation to use if the 
+			imaging volume instance does not include a display orientation.
+		@input vol_direction (bool, default=False): copy SimpleITK direction vector to VTK (display) volume
+
+		@returns SonadorImagingVolume: imaging volume instance with additional properties
+			@attr vol_dcm (SimpleITK.Image): image instance which has been transformed to the specified
+				volume anatomic orientation
+			@attr vol_vtk (vtk.vtkImageData): display volume to be used in visualization
+			@attr tx_inv (numpy.Array): numpy array containing the reverse transform for the display volume
+	'''
+	# Initialize imaging volume
+	ivolume = SonadorImagingVolume(sx)
+
+	# Create anatomic orientation, display volume, and inverse transform
+	setattr(ivolume, vol_dcm_attr, sitk.DICOMOrient(
+		ivolume.volume, getattr(sx, 'volume_anatomic_orientation', volume_anatomic_orientation_default)))
+	setattr(ivolume, vol_vtk_attr, sitk2vtk(ivolume.vol_dcm, sitk_direction=vol_direction))
+	setattr(ivolume, tx_inv_attr, tx_matrix(
+		np.linalg.inv(np.array(ivolume.vol_dcm.GetDirection()).reshape((3,3))),
+		ivolume.vol_dcm.GetOrigin(),
+	))
+
+	return ivolume
