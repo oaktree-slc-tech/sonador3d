@@ -9,6 +9,7 @@ import vtk
 import pyvista as pv
 
 from sonador.imaging.orthanc.base import ImageCoord
+from skimage.draw import polygon2mask
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,8 @@ def mesh2contours(poly, img: sitk.Image, *args, axis=2, **kwargs):
 	'''	Create contoured slices from the mesh using the provided image volume.
 
 		@input poly (pyvista.PolyData): mesh to be sliced
-		@input img (SimpleITK.Image): volume associated with the mesh to be used for ss
+		@input img (SimpleITK.Image): volume associated with the mesh to be used for spatial coordinates
+			and to determine along which axis the mesh should be sliced.
 		@input axis (int, default=2): axis through which the mesh should be sliced
 			(x=0, y=1, z=2).
 	'''
@@ -178,3 +180,74 @@ def mesh2contours(poly, img: sitk.Image, *args, axis=2, **kwargs):
 			generate_triangles=kwargs.get('generate_triangles', True)))
 
 	return contours
+
+
+def mesh2labelmap(poly, img, axis=2, mask_array=None, mask_array_dtype=bool, 
+		sitk_origin=True, sitk_direction=True, sitk_dtype=np.uint8, **kwargs):
+	'''	Convert the provided poly to a labelmap image. This method slices the provided polydata
+		using the image coordinate system as a guide and then creates
+
+		@input poly (pyvista.PolyData): mesh to be converted to an image volume
+		@input img (SimpleITK.Image): volume associated with the mesh. Used for slicing and spacing.
+		@input axis (int, default=2): axis through which the mesh should be slided (x=0, y=1, z=2)
+
+		@returns SimpleITK.Image sharing the same coordinate system as img
+	'''
+	# Create array container (numpy). The container array does not contain
+	# spacing, direction/pose, or origin. Those will be copied from the source
+	# imaging later in the method.
+	mask_array = mask_array or np.zeros(shape=img.GetSize()[::-1], dtype=mask_array_dtype)
+
+	# Slice mesh to contours
+	contours = mesh2contours(poly, img, axis=axis, **kwargs)
+
+	# Iterate through contours, generate slice, and unpack slice into volume array.
+	# Take into account which axis is being un-packed.
+	for i,g in enumerate(contours):
+
+		def _slice_plane(_p):
+			'''	Retrieve the size elements of the source image corresponding
+				to the axis along which the labelmap is being sliced.
+			'''
+			if axis == 0:
+				return _p[1:]
+			if axis == 1:
+				return _p[0],_p[2]
+			elif axis == 2:
+				return _p[:2]
+
+			raise ValueError('Unable to retrieve points, invalid axis=%s' % axis)
+
+		# Create a mask for pixels that fall within the bonds of the polygon
+		if len(g.points):
+
+			# polygon2mask takes the desired image size as an input alongside an ordered list of 
+			# of the polygon points
+			mask = polygon2mask(_slice_plane(img.GetSize()),
+				[_slice_plane(img.TransformPhysicalPointToIndex(p))[::-1] for p in slice2polypoints(g)])
+
+		# Create a fallback empty array for slices without contours
+		else:
+			mask = np.zeros(_slice_plane(img.GetSize()))
+
+		# Add layer mask to container
+		if axis == 0:
+			mask_array[:,:,i] = mask
+		elif axis == 1:
+			mask_array[:,i,:] = mask
+		elif axis == 2:
+			mask_array[i,:,:] = mask
+		else:
+			raise ValueError('Unable to add slice labelmap to volume, invalid axis=%s' % axis)
+
+	# Convert numpy array to SimpleITK.Image
+	mask_img = sitk.GetImageFromArray(mask_array.astype(sitk_dtype))
+	mask_img.SetSpacing(img.GetSpacing())
+
+	# Set origin and direction
+	if sitk_origin:
+		mask_img.SetOrigin(img.GetOrigin())
+	if sitk_direction:
+		mask_img.SetDirection(img.GetDirection())
+
+	return mask_img
