@@ -6,3 +6,4 @@ sonador
 # Medical Imaging Utilities
 SimpleITK>=2.2.1
 pyvista>=0.38.5
+skimage
