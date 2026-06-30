@@ -76,7 +76,7 @@ class SonadorMesh(object):
 			if cleanup:
 				tmp.cleanup()
 
-	def fetch_mesh_data(self, *args, ignore_errors=False, **kwargs):
+	def fetch_mesh_data(self, *args, ignore_errors=False, mesh_filter=None, **kwargs):
 		''' Retrieve mesh instances associated with the series
 		'''
 		if not len(self.series.instances_collection):
@@ -89,7 +89,12 @@ class SonadorMesh(object):
 			for dcm in self.series.instances_collection:
 
 				# Parse DICOM spatial data
-				try: m3d_meshes.append(self.parse_dcm_geometry(dcm, *args, tmp=tmp, cleanup=False, **kwargs))
+				try:
+
+					# Parse geometry and attach reference to source DCM instance
+					g = self.parse_dcm_geometry(dcm, *args, tmp=tmp, cleanup=False, **kwargs)
+					pv.set_new_attribute(g, 'dcm', dcm)
+					m3d_meshes.append(g)
 				
 				# Unable to parse due to an error: log and (maybe) skip
 				except Exception as err:
@@ -97,6 +102,10 @@ class SonadorMesh(object):
 						% (dcm.pk, err))
 					if not ignore_errors:
 						raise err
+
+		# Filter mesh instances
+		if mesh_filter and callable(mesh_filter):
+			m3d_meshes = list(filter(mesh_filter, m3d_meshes))
 
 		return m3d_meshes
 
